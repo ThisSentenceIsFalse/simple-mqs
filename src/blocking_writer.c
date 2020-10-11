@@ -7,14 +7,27 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 
-char info_str[1<<10];
+#ifndef DEFAULT_BUF_LEN
+#define DEFAULT_BUF_LEN (8192 - sizeof(long))
+#endif
 
-char *const default_qpath = "./";
+/*
+ * Doesn't matter what the path is as long as it is "accessible"
+ */
+#ifndef DEFAULT_QPATH
+#define DEFAULT_QPATH "./";
+#endif
 
 /*
  * Should always be greater than 0, man ftok
  */
-int const default_proj_id = 1;
+#ifndef DEFAULT_PROJ_ID
+#define DEFAULT_PROJ_ID 1
+#endif
+
+#ifndef DEFAULT_WR_PERM
+#define DEFAULT_WR_PERM (S_IWUSR | S_IRUSR | S_IRGRP)
+#endif
 
 enum MSG_TYPE {
     /*
@@ -24,19 +37,19 @@ enum MSG_TYPE {
     MSG_SEP
 };
 
-#define MAX_MSG_LEN (8192 - sizeof(long))
 
 struct msg {
     long msg_type;
-    char msg_text[MAX_MSG_LEN];
+    char msg_text[DEFAULT_BUF_LEN];
 };
 
+char info_str[1 << 10];
 struct msg send_msg_buffer;
 
 int main(int argc, char *argv[]) {
-    char * const qpath = default_qpath;
-    int const proj_id = default_proj_id;
-
+    char * const qpath = DEFAULT_QPATH;
+    int const proj_id = DEFAULT_PROJ_ID;
+    
     key_t qkey = ftok(qpath, proj_id);
 
     if (qkey < 0) {
@@ -46,7 +59,7 @@ int main(int argc, char *argv[]) {
         goto err;
     }
 
-    int permflg = S_IRUSR | S_IWUSR | S_IRGRP;
+    int permflg = DEFAULT_WR_PERM;
     int const qid = msgget(qkey, permflg | IPC_CREAT);
 
     if (qid < 0) {
@@ -62,7 +75,7 @@ int main(int argc, char *argv[]) {
     char msg_text[] = "A";
 
     send_msg_buffer.msg_type = MSG_CHUNK;
-    strncpy(send_msg_buffer.msg_text, msg_text, MAX_MSG_LEN);
+    strncpy(send_msg_buffer.msg_text, msg_text, DEFAULT_BUF_LEN);
     
     int send_result = msgsnd(qid, (void *)&send_msg_buffer, sizeof(msg_text), 0);
 
