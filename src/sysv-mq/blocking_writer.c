@@ -1,7 +1,6 @@
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 #include <sys/ipc.h>
 #include <sys/msg.h>
 #include <sys/stat.h>
@@ -25,8 +24,8 @@
 #define DEFAULT_PROJ_ID 1
 #endif
 
-#ifndef DEFAULT_WR_PERM
-#define DEFAULT_WR_PERM (S_IWUSR | S_IRUSR | S_IRGRP)
+#ifndef DEFAULT_W_PERM
+#define DEFAULT_W_PERM (S_IWUSR | S_IRUSR | S_IRGRP)
 #endif
 
 enum MSG_TYPE {
@@ -46,9 +45,24 @@ struct msg {
 char info_str[1 << 10];
 struct msg send_msg_buffer;
 
+/*
+ * It should fit in both DEFAULT_BUF_LEN and the system MSGMAX.
+ * Implementations differ in their support for determining
+ * these values. Linux offers a configurable value in
+ * "/proc/sys/kernel/msgmax"
+ */
+size_t get_msg_max() {
+    return DEFAULT_BUF_LEN;
+}
+
 int main(int argc, char *argv[]) {
     char * const qpath = DEFAULT_QPATH;
     int const proj_id = DEFAULT_PROJ_ID;
+
+    /*
+     * This is what we'll use for splitting input
+     */ 
+    size_t const msg_max = get_msg_max();
     
     key_t qkey = ftok(qpath, proj_id);
 
@@ -59,7 +73,7 @@ int main(int argc, char *argv[]) {
         goto err;
     }
 
-    int permflg = DEFAULT_WR_PERM;
+    int permflg = DEFAULT_W_PERM;
     int const qid = msgget(qkey, permflg | IPC_CREAT);
 
     if (qid < 0) {
@@ -72,21 +86,29 @@ int main(int argc, char *argv[]) {
     fprintf(stderr, "Got mq key %d\n", qid);
     fprintf(stderr, "Sending message...\n");
 
-    char msg_text[] = "A";
+    size_t msg_bytes;
 
-    send_msg_buffer.msg_type = MSG_CHUNK;
-    strncpy(send_msg_buffer.msg_text, msg_text, DEFAULT_BUF_LEN);
-    
-    int send_result = msgsnd(qid, (void *)&send_msg_buffer, sizeof(msg_text), 0);
+    while (msg_bytes = fread(send_msg_buffer.msg_text, 1, msg_max, stdin)) {
+        if (msg_bytes < msg_max && ferror(stdin) != 0) {
+            sprintf(info_str, "Bad read from stdin");
+            perror(info_str);
 
-    if (send_result < 0) {
-        sprintf(info_str,"Could not send Hello message on queue");
-        perror(info_str);
+            goto err;
+        }
 
-        goto err;
+        send_msg_buffer.msg_type = MSG_CHUNK;
+
+        int send_result = msgsnd(qid, (void *)&send_msg_buffer, msg_bytes, 0);
+
+        if (send_result < 0) {
+            sprintf(info_str,"Could not send message chunk on queue");
+            perror(info_str);
+
+            goto err;
+        }
     }
 
-    fprintf(stderr, "Sent message \"%s\"\n", msg_text);
+    fprintf(stderr, "Sent message chunk\n");
 
     return EXIT_SUCCESS;
 
