@@ -1,6 +1,7 @@
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/ipc.h>
 #include <sys/msg.h>
 #include <sys/stat.h>
@@ -8,7 +9,7 @@
 
 char info_str[1<<10];
 
-char *const default_qpath = "/";
+char *const default_qpath = "./";
 
 /*
  * Should always be greater than 0, man ftok
@@ -23,31 +24,30 @@ enum MSG_TYPE {
     MSG_SEP
 };
 
-size_t MAX_MSG_LEN = 8192;
+#define MAX_MSG_LEN (8192 - sizeof(long))
 
 struct msg {
     long msg_type;
-    char *msg_text;
+    char msg_text[MAX_MSG_LEN];
 };
 
-typedef struct msg msg;
+struct msg send_msg_buffer;
 
 int main(int argc, char *argv[]) {
-    
     char * const qpath = default_qpath;
     int const proj_id = default_proj_id;
 
     key_t qkey = ftok(qpath, proj_id);
 
-    int permflg = S_IRUSR | S_IWUSR | S_IRGRP;
-    int const qid = msgget(qkey, permflg | IPC_CREAT);
-
-    if (qid < 0) {
+    if (qkey < 0) {
         sprintf(info_str, "Could not get key for mq %s:%d", qpath, proj_id);
         perror(info_str);
 
         goto err;
     }
+
+    int permflg = S_IRUSR | S_IWUSR | S_IRGRP;
+    int const qid = msgget(qkey, permflg | IPC_CREAT);
 
     if (qid < 0) {
         sprintf(info_str, "Could not create mq for qid %d", qid);
@@ -56,18 +56,15 @@ int main(int argc, char *argv[]) {
         goto err;
     }
 
-    printf("Got mq key %d\n", qid);
+    fprintf(stderr, "Got mq key %d\n", qid);
+    fprintf(stderr, "Sending message...\n");
 
-    char msg_text[] = "Hello World";
+    char msg_text[] = "A";
 
-    printf("Sending \"%s\", length %d\n", msg_text, sizeof(msg_text));
-
-    msg const helloMsg = {
-        .msg_type = MSG_CHUNK, 
-        .msg_text = msg_text
-    };
+    send_msg_buffer.msg_type = MSG_CHUNK;
+    strncpy(send_msg_buffer.msg_text, msg_text, MAX_MSG_LEN);
     
-    int send_result = msgsnd(qid, (void *)&helloMsg, sizeof(msg_text), 0);
+    int send_result = msgsnd(qid, (void *)&send_msg_buffer, sizeof(msg_text), 0);
 
     if (send_result < 0) {
         sprintf(info_str,"Could not send Hello message on queue");
@@ -76,7 +73,7 @@ int main(int argc, char *argv[]) {
         goto err;
     }
 
-    printf("Sent message \"%s\"\n", msg_text);
+    fprintf(stderr, "Sent message \"%s\"\n", msg_text);
 
     return EXIT_SUCCESS;
 
