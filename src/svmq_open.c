@@ -3,59 +3,160 @@
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <stdbool.h>
+#include <unistd.h>
 
 #ifndef DEFAULT_QPATH
 #define DEFAULT_QPATH "./"
 #endif
 
 #ifndef DEFAULT_QIDX
-#define DEFAULT_QIDX 1
+#define DEFAULT_QIDX ((char)1)
 #endif
 
 static char error_str[1<<12];
 
-int main(int argc, char *argv[]) {
-    key_t qkey, cfg_key = (key_t)-1;
-    bool cfg_excl = false;
+struct open_cfg {
+    char *path;
+    char idx;
+    key_t key;
+    int excl;
+    mode_t mode;
+};
 
-    if (cfg_key == (key_t)-1) {
-        qkey = ftok(DEFAULT_QPATH, DEFAULT_QIDX);
+bool parse_key(key_t *buf, char *arg) {
+    if (strcmp(arg, "private") == 0) {
+        *buf = IPC_PRIVATE;
 
-        if (qkey == (key_t)-1) {
-            sprintf(error_str, "Could not obtain key %s:%zd\n", DEFAULT_QPATH, DEFAULT_QIDX);
-            perror(error_str);
-
-            goto err;
-        }
-    } else {
-        qkey = cfg_key;
+        return true;
     }
 
-    fprintf(stderr, "Obtained key %zd\n", qkey);
+    return sscanf(arg, "%jd", buf) == 1;
+}
 
-    int mqmode = S_IWUSR | S_IRUSR | S_IRGRP;
-    int mqflg = IPC_CREAT | IPC_EXCL | mqmode;
+bool parse_mode(mode_t *mode, char *arg) {
+    mode_t parsed_mode;
+
+    if (sscanf(arg, "%o", &parsed_mode) == 1) {
+        if (parsed_mode < 0700) {
+            *mode = parsed_mode;
+
+            return true;
+        }
+    }
+
+    return false;
+}
+
+bool parse_idx(char *idx, char *arg) {
+    char parsed_idx;
+
+    if (sscanf(arg, "%c", &idx) == 1) {
+        if (parsed_idx != 0) {
+            *idx = parsed_idx;
+
+            return true;
+        }
+    }
+    
+    return false;
+
+}
+
+struct open_cfg parse_opts(int argc, char *argv[]) {
+    struct open_cfg cfg = {
+        .path = DEFAULT_QPATH,
+        .idx = DEFAULT_QIDX,
+        .key = (key_t)-1,
+        .excl = 0,
+        .mode = S_IWUSR | S_IRUSR | S_IRGRP
+    };
+    char opt;
+
+    while ((opt = getopt(argc, argv, "p:i:k:m:x")) != -1) {
+        switch (opt) {
+            case 'p': {
+                cfg.path = optarg;
+
+                break;
+            }
+            case 'i': {
+                if (!parse_idx(&cfg.idx, optarg)) {
+                    perror("Failed to parse index value");
+
+                    exit(EXIT_FAILURE);
+                }
+
+                break;
+            }
+            case 'k': {
+                if (!parse_key(&cfg.key, optarg)) {
+                    perror("Failed to parse key value");
+
+                    exit(EXIT_FAILURE);
+                }
+
+                break;
+            }
+            case 'x': {
+                cfg.excl = IPC_EXCL;
+
+                break;
+            }
+            case 'm': {
+                if (!parse_mode(&cfg.mode, optarg)) {
+                    perror("Failed to parse mode value");
+
+                    exit(EXIT_FAILURE);
+                }
+
+                break;
+            }
+            default: {
+                 fprintf(stderr, "TODO: Usage doc\n");
+
+                 exit(EXIT_FAILURE);
+            }
+        }
+    }
+
+    return cfg;
+}
+
+key_t get_key(struct open_cfg *cfg) {
+    if (cfg->key != (key_t)-1) {
+        return cfg->key;
+    }
+
+    fprintf(stderr, "Converting %s:%u to queue key...\n", cfg->path, cfg->idx);
+
+    return ftok(cfg->path, cfg->idx);
+}
+
+int main(int argc, char *argv[]) {
+    struct open_cfg cfg = parse_opts(argc, argv);
+    key_t qkey = get_key(&cfg);
+
+    if (qkey == (key_t)-1) {
+        perror("Could not obtain queue key");
+
+        exit(EXIT_FAILURE);
+    }
+
+    fprintf(stderr, "Obtained key %jd\n", qkey);
+
+    int mqflg = IPC_CREAT | cfg.excl | cfg.mode;
     int mqid = msgget(qkey, mqflg);
 
     if (mqid == -1) {
-        if (errno == EEXIST && !cfg_excl) {
-            fprintf(stderr, "Queue for key %zd already exists\n", qkey);
-        } else {
-            sprintf(error_str, "Could not create queue %zd", qkey);
-            perror(error_str);
+        sprintf(error_str, "Could not create queue %zd", qkey);
+        perror(error_str);
 
-            goto err;
-        }
-
-        goto err;
+        exit(EXIT_FAILURE);
     } else {
         fprintf(stderr, "Successfully created queue %zd\n", qkey);
     }
 
-	return EXIT_SUCCESS;
-
-err:
-
-    return EXIT_FAILURE;
+	exit(EXIT_SUCCESS);
 }
